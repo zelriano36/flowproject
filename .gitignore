@@ -1,0 +1,36 @@
+# --- Configuration locale (mots de passe) ---
+/config/config.php
+
+# --- Fichiers envoyés par les utilisateurs (avatars, images de tâches, logo) ---
+/storage/*
+!/storage/*/
+/storage/*/*
+!/storage/*/.gitkeep
+
+# --- Exports de base de données (sauf le schéma d'installation) ---
+*.sql
+!/sql/schema.sql
+
+# --- Fichiers de test et de debug ---
+/public/info.php
+/public/phpinfo.php
+*.log
+error_log
+
+# --- Dépendances et caches ---
+/vendor/
+/node_modules/
+.phpunit.result.cache
+
+# --- Éditeurs et IDE ---
+.vscode/
+.idea/
+*.swp
+*.sublime-workspace
+
+# --- Système (Windows, macOS) ---
+Thumbs.db
+desktop.ini
+.DS_Store
+*.url
+*.lnk
