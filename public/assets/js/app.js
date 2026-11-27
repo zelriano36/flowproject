@@ -23,8 +23,9 @@
 
     var url = board.dataset.url;
     var csrf = board.dataset.csrf;
-    var MOVE = 6;
-    var LONG = 450;
+    var MOVE = 6;             // souris : déplacement avant de saisir la carte
+    var TOUCH_MOVE = 10;      // tactile : tolérance du doigt pendant l'appui long
+    var LONG = 400;           // tactile : durée de l'appui long (ms)
     var MB = 1024 * 1024;
     var MAX_IMG_MB = 15;      // doit correspondre à TaskImage::MAX_BYTES
     var MAX_TOTAL_MB = 40;    // doit rester inférieur à post_max_size de php.ini
@@ -32,6 +33,8 @@
     var pending = null;
     var timer = null;
     var touchStart = null;
+    var pointer = { x: 0, y: 0 };
+    var raf = null;
 
     function movableCard(target) {
         if (target.closest('button, a, input, select, textarea, summary, label, .more, .addcard, .subtasks, .task-images')) return null;
@@ -40,7 +43,17 @@
     }
     function columnAt(x, y) {
         var el = document.elementFromPoint(x, y);
-        return el ? el.closest('.column') : null;
+        var col = el ? el.closest('.column') : null;
+        if (col) return col;
+        // Entre deux colonnes : on prend celle située sous la position horizontale du doigt
+        var br = board.getBoundingClientRect();
+        if (y < br.top || y > br.bottom) return null;
+        var cols = board.querySelectorAll('.column');
+        for (var i = 0; i < cols.length; i++) {
+            var r = cols[i].getBoundingClientRect();
+            if (x >= r.left && x <= r.right) return cols[i];
+        }
+        return null;
     }
     function highlight(col) {
         board.querySelectorAll('.column').forEach(function (c) {
@@ -53,12 +66,28 @@
         });
     }
     function place(x, y) {
+        pointer.x = x;
+        pointer.y = y;
         drag.ghost.style.left = (x - drag.dx) + 'px';
         drag.ghost.style.top = (y - drag.dy) + 'px';
-        highlight(columnAt(x, y));
+    }
+    // Défilement automatique continu près des bords (tableau et page)
+    function tick() {
+        if (!drag) { raf = null; return; }
         var r = board.getBoundingClientRect();
-        if (x < r.left + 40) board.scrollLeft -= 12;
-        else if (x > r.right - 40) board.scrollLeft += 12;
+        var zone = Math.min(80, r.width * 0.2);
+        var vx = 0;
+        if (pointer.x < r.left + zone) vx = -Math.ceil((r.left + zone - pointer.x) / zone * 16);
+        else if (pointer.x > r.right - zone) vx = Math.ceil((pointer.x - (r.right - zone)) / zone * 16);
+        if (vx) board.scrollLeft += vx;
+
+        var zy = 70, vy = 0, vh = window.innerHeight;
+        if (pointer.y < zy) vy = -Math.ceil((zy - pointer.y) / zy * 14);
+        else if (pointer.y > vh - zy) vy = Math.ceil((pointer.y - (vh - zy)) / zy * 14);
+        if (vy) window.scrollBy(0, vy);
+
+        highlight(columnAt(pointer.x, pointer.y));
+        raf = requestAnimationFrame(tick);
     }
     function start(card, x, y) {
         var rect = card.getBoundingClientRect();
@@ -67,10 +96,12 @@
         ghost.style.width = rect.width + 'px';
         document.body.appendChild(ghost);
         document.body.classList.add('is-dragging');
+        if (window.getSelection) window.getSelection().removeAllRanges();
         drag = { card: card, ghost: ghost, from: card.closest('.column'),
                  dx: x - rect.left, dy: y - rect.top };
         card.classList.add('dragging');
         place(x, y);
+        if (!raf) raf = requestAnimationFrame(tick);
     }
     function finish(x, y, cancel) {
         if (!drag) return;
@@ -178,7 +209,33 @@
         document.addEventListener('keydown', onKey);
         document.body.appendChild(box);
     });
+    /* ----- Boutons « déplacer » (téléphone) ----- */
+    function moveCard(card, col) {
+        if (!col || col === card.closest('.column')) return;
+        col.querySelector('.cards').appendChild(card);
+        updateCounts();
+        card.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
 
+        var data = new FormData();
+        data.append('action', 'change_status');
+        data.append('task_id', card.dataset.id);
+        data.append('status', col.dataset.status);
+        data.append('csrf', csrf);
+        data.append('ajax', '1');
+        fetch(url, { method: 'POST', body: data, credentials: 'same-origin' })
+            .then(function (r) { return r.ok ? r.json() : Promise.reject(); })
+            .then(function (j) { if (!j.ok) throw 0; })
+            .catch(function () { window.location.reload(); });
+    }
+    board.addEventListener('click', function (e) {
+        var btn = e.target.closest('[data-move]');
+        if (!btn) return;
+        var card = btn.closest('.task');
+        var cols = Array.prototype.slice.call(board.querySelectorAll('.column'));
+        var i = cols.indexOf(card.closest('.column'));
+        var j = btn.dataset.move === 'next' ? i + 1 : i - 1;
+        if (j >= 0 && j < cols.length) moveCard(card, cols[j]);
+    });
     /* ----- Souris ----- */
     board.addEventListener('mousedown', function (e) {
         if (e.button !== 0) return;
@@ -202,6 +259,7 @@
     /* ----- Tactile : appui long ----- */
     function clearTimer() {
         if (timer) { clearTimeout(timer); timer = null; }
+        document.body.classList.remove('is-touching');
     }
     board.addEventListener('touchstart', function (e) {
         var t = e.touches[0];
@@ -209,34 +267,37 @@
         if (!card || e.touches.length > 1) return;
         touchStart = { x: t.clientX, y: t.clientY };
         clearTimer();
+        document.body.classList.add('is-touching');
         timer = setTimeout(function () {
             timer = null;
+            document.body.classList.remove('is-touching');
             start(card, touchStart.x, touchStart.y);
             if (navigator.vibrate) navigator.vibrate(15);
         }, LONG);
     }, { passive: true });
 
-    board.addEventListener('touchmove', function (e) {
+    // Écouteur non passif sur le document : nécessaire pour bloquer le défilement pendant le déplacement
+    document.addEventListener('touchmove', function (e) {
         var t = e.touches[0];
         if (drag) {
-            e.preventDefault();
+            if (e.cancelable) e.preventDefault();
             place(t.clientX, t.clientY);
             return;
         }
         if (timer && touchStart &&
-            (Math.abs(t.clientX - touchStart.x) > MOVE || Math.abs(t.clientY - touchStart.y) > MOVE)) {
+            (Math.abs(t.clientX - touchStart.x) > TOUCH_MOVE || Math.abs(t.clientY - touchStart.y) > TOUCH_MOVE)) {
             clearTimer();
         }
     }, { passive: false });
 
-    board.addEventListener('touchend', function (e) {
+    document.addEventListener('touchend', function (e) {
         clearTimer();
         if (drag) {
             var t = e.changedTouches[0];
             finish(t.clientX, t.clientY, false);
         }
     });
-    board.addEventListener('touchcancel', function () {
+    document.addEventListener('touchcancel', function () {
         clearTimer();
         if (drag) finish(0, 0, true);
     });

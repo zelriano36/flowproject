@@ -344,7 +344,12 @@ include __DIR__ . '/../includes/header.php';
                                     <?= avatar($t['assigned_name'], (int)$t['assigned_color'], 'sm', (int)$t['assigned_user_id']) ?> <?= e($t['assigned_name']) ?>
                                 <?php else: ?>Non assignée<?php endif; ?>
                             </div>
-
+                            <?php if ($canMove): ?>
+<div class="move-btns">
+    <button type="button" class="secondary small" data-move="prev" aria-label="Colonne précédente">◀</button>
+    <button type="button" class="secondary small" data-move="next" aria-label="Colonne suivante">▶</button>
+</div>
+<?php endif; ?>
                             <?php if ($t['assigned_user_id'] === null): ?>
                             <form method="post" class="inline">
                                 <?= csrf_field() ?>
